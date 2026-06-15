@@ -50,23 +50,27 @@ export class CallService {
     memoryStore.updateSeat(seatId, { status: seatStatus, currentCallId: call.id });
 
     const mergeResult = this.tryMergeCalls(newCall);
-
-    WebSocketServer.broadcast({ type: 'CALL_CREATED', data: newCall });
-    WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(seatId) });
+    const finalCall = memoryStore.getCallById(newCall.id) || newCall;
 
     if (mergeResult?.mergedInto) {
       WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: mergeResult.mergedInto });
+      WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: finalCall });
+    } else {
+      WebSocketServer.broadcast({ type: 'CALL_CREATED', data: finalCall });
     }
+
+    WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(seatId) });
+    WebSocketServer.broadcast({ type: 'CALLS_REFRESH', data: { timestamp: Date.now() } });
 
     if (mergeResult?.mergedInto) {
       return {
-        call: newCall,
+        call: finalCall,
         isMerged: true,
         mergedIntoCall: mergeResult.mergedInto
       };
     }
 
-    return { call: newCall };
+    return { call: finalCall };
   }
 
   private static tryMergeCalls(newCall: CallRecord): { mergedInto: CallRecord | null } | null {
@@ -114,9 +118,10 @@ export class CallService {
     if (!call) return null;
     if (call.status !== 'pending') return null;
 
+    const now = Date.now();
     const updated = memoryStore.updateCall(callId, {
       status: 'accepted',
-      acceptedAt: Date.now(),
+      acceptedAt: now,
       acceptedBy: nurseName
     });
 
@@ -126,14 +131,18 @@ export class CallService {
       updated.mergedIds.forEach(id => {
         const subCall = memoryStore.getCallById(id);
         if (subCall) {
-          memoryStore.updateCall(id, { status: 'accepted', acceptedAt: Date.now(), acceptedBy: nurseName });
+          memoryStore.updateCall(id, { status: 'accepted', acceptedAt: now, acceptedBy: nurseName });
           memoryStore.updateSeat(subCall.seatId, { status: 'processing' });
+          const refreshedSub = memoryStore.getCallById(id);
+          if (refreshedSub) WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: refreshedSub });
+          WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(subCall.seatId) });
         }
       });
     }
 
     WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: updated });
     WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(call.seatId) });
+    WebSocketServer.broadcast({ type: 'CALLS_REFRESH', data: { timestamp: now } });
 
     return updated;
   }
@@ -200,6 +209,9 @@ export class CallService {
               completedAt: now
             });
           }
+          const refreshedSub = memoryStore.getCallById(id);
+          if (refreshedSub) WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: refreshedSub });
+          if (subSeat) WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(subCall.seatId) });
         }
       });
     }
@@ -207,6 +219,7 @@ export class CallService {
     WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: updated });
     WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(call.seatId) });
     WebSocketServer.broadcast({ type: 'CALL_COMPLETED', data: updated });
+    WebSocketServer.broadcast({ type: 'CALLS_REFRESH', data: { timestamp: now } });
 
     return updated;
   }
@@ -215,6 +228,7 @@ export class CallService {
     const call = memoryStore.getCallById(callId);
     if (!call || call.status === 'completed') return null;
 
+    const now = Date.now();
     const updated = memoryStore.updateCall(callId, { status: 'cancelled' });
     const seat = memoryStore.getSeatById(call.seatId);
     if (seat) {
@@ -231,8 +245,10 @@ export class CallService {
           if (subSeat) {
             const subNewStatus: Seat['status'] = subSeat.infusionStartTime ? 'infusing' : 'idle';
             memoryStore.updateSeat(subCall.seatId, { status: subNewStatus, currentCallId: undefined });
-            WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(subCall.seatId) });
           }
+          const refreshedSub = memoryStore.getCallById(id);
+          if (refreshedSub) WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: refreshedSub });
+          if (subSeat) WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(subCall.seatId) });
         }
       });
     }
@@ -246,12 +262,13 @@ export class CallService {
           mergedIds: newMergedIds,
           mergedSeatNumbers: newMergedSeats
         });
-        WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: updatedMain });
+        if (updatedMain) WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: updatedMain });
       }
     }
 
     WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: updated });
     WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(call.seatId) });
+    WebSocketServer.broadcast({ type: 'CALLS_REFRESH', data: { timestamp: now } });
 
     return updated;
   }

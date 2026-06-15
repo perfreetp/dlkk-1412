@@ -55,7 +55,16 @@ export const useCallStore = create<CallStore>((set, get) => ({
       const data = await res.json();
 
       if (data.success) {
-        if (data.data) get().addCall(data.data);
+        if (data.data) {
+          if (data.isMerged && data.mergedIntoCall) {
+            get().updateCall({
+              ...data.data,
+              mergedIntoId: data.mergedIntoCall.id
+            });
+          } else {
+            get().addCall(data.data);
+          }
+        }
         if (data.mergedIntoCall) get().updateCall(data.mergedIntoCall);
 
         return {
