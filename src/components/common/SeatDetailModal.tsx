@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Pill, Syringe, Bandage, MessageCircle, AlertTriangle, MoreHorizontal, User, Clock, Play, Square, Pause } from 'lucide-react';
+import { X, Pill, Syringe, Bandage, MessageCircle, AlertTriangle, MoreHorizontal, User, Clock, Play, Square, Pause, AlertCircle, Users, CheckCircle2 } from 'lucide-react';
 import { Seat, CallType, ABNORMAL_TYPES, CALL_TYPE_LABELS } from '../../types';
 import { useSeatStore } from '../../stores/useSeatStore';
 import { useCallStore } from '../../stores/useCallStore';
@@ -26,7 +26,7 @@ export default function SeatDetailModal({ seat, onClose }: Props) {
   const [duration, setDuration] = useState(90);
   const [showAbnormalModal, setShowAbnormalModal] = useState(false);
   const [abnormalType, setAbnormalType] = useState('');
-  const [callSuccess, setCallSuccess] = useState<CallType | null>(null);
+  const [callFeedback, setCallFeedback] = useState<{ type: CallType; mode: 'success' | 'paused' | 'duplicate' | 'merged'; message?: string; existingType?: CallType; mergedSeatNumber?: string } | null>(null);
 
   const activeCalls = getActiveCallsBySeat(seat.id);
   const now = Date.now();
@@ -39,21 +39,82 @@ export default function SeatDetailModal({ seat, onClose }: Props) {
       setShowAbnormalModal(true);
       return;
     }
+
+    if (seat.isPaused) {
+      setCallFeedback({ type, mode: 'paused', message: '当前座位已暂停，恢复后才能发起呼叫' });
+      setTimeout(() => setCallFeedback(null), 2500);
+      return;
+    }
+
     const result = await createCall(seat.id, type);
-    if (result) {
-      setCallSuccess(type);
-      setTimeout(() => setCallSuccess(null), 2000);
+
+    if (result.isPaused) {
+      setCallFeedback({ type, mode: 'paused', message: result.message || '座位已暂停' });
+      setTimeout(() => setCallFeedback(null), 2500);
+      return;
+    }
+
+    if (result.isDuplicate) {
+      setCallFeedback({
+        type,
+        mode: 'duplicate',
+        existingType: result.duplicateType,
+        message: result.message
+      });
+      setTimeout(() => setCallFeedback(null), 3000);
+      return;
+    }
+
+    if (result.isMerged && result.mergedIntoCall) {
+      setCallFeedback({
+        type,
+        mode: 'merged',
+        mergedSeatNumber: result.mergedIntoCall.seatNumber
+      });
+      setTimeout(() => setCallFeedback(null), 2500);
+      return;
+    }
+
+    if (result.call) {
+      setCallFeedback({ type, mode: 'success' });
+      setTimeout(() => setCallFeedback(null), 2000);
     }
   };
 
   const handleAbnormalSubmit = async () => {
     if (!abnormalType) return;
-    const result = await createCall(seat.id, 'abnormal', abnormalType);
-    if (result) {
+
+    if (seat.isPaused) {
       setShowAbnormalModal(false);
-      setAbnormalType('');
-      setCallSuccess('abnormal');
-      setTimeout(() => setCallSuccess(null), 2000);
+      setCallFeedback({ type: 'abnormal', mode: 'paused', message: '当前座位已暂停，恢复后才能发起呼叫' });
+      setTimeout(() => setCallFeedback(null), 2500);
+      return;
+    }
+
+    const result = await createCall(seat.id, 'abnormal', abnormalType);
+    setShowAbnormalModal(false);
+    setAbnormalType('');
+
+    if (result.isPaused) {
+      setCallFeedback({ type: 'abnormal', mode: 'paused', message: result.message || '座位已暂停' });
+      setTimeout(() => setCallFeedback(null), 2500);
+      return;
+    }
+
+    if (result.isDuplicate) {
+      setCallFeedback({
+        type: 'abnormal',
+        mode: 'duplicate',
+        existingType: result.duplicateType,
+        message: result.message
+      });
+      setTimeout(() => setCallFeedback(null), 3000);
+      return;
+    }
+
+    if (result.call) {
+      setCallFeedback({ type: 'abnormal', mode: 'success' });
+      setTimeout(() => setCallFeedback(null), 2000);
     }
   };
 
@@ -221,29 +282,74 @@ export default function SeatDetailModal({ seat, onClose }: Props) {
               <MessageCircle className="w-4 h-4" />
               发起呼叫
             </div>
+
+            {callFeedback && (
+              <div className={`mb-4 p-3 rounded-2xl flex items-center gap-3 text-sm font-medium animate-slide-in ${
+                callFeedback.mode === 'success'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50'
+                  : callFeedback.mode === 'paused'
+                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                    : callFeedback.mode === 'duplicate'
+                      ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-900/50'
+                      : 'bg-cyan-50 dark:bg-cyan-950/40 text-cyan-700 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-900/50'
+              }`}>
+                {callFeedback.mode === 'success' && <CheckCircle2 className="w-5 h-5 flex-shrink-0" />}
+                {callFeedback.mode === 'paused' && <Pause className="w-5 h-5 flex-shrink-0" />}
+                {callFeedback.mode === 'duplicate' && <AlertCircle className="w-5 h-5 flex-shrink-0" />}
+                {callFeedback.mode === 'merged' && <Users className="w-5 h-5 flex-shrink-0" />}
+                <div className="flex-1">
+                  <div className="font-bold">
+                    {callFeedback.mode === 'success' && `${CALL_TYPE_LABELS[callFeedback.type]}呼叫已发送`}
+                    {callFeedback.mode === 'paused' && '座位已暂停'}
+                    {callFeedback.mode === 'duplicate' && '已有呼叫等待中'}
+                    {callFeedback.mode === 'merged' && '已加入合并队列'}
+                  </div>
+                  <div className="text-xs opacity-80 mt-0.5">
+                    {callFeedback.mode === 'success' && '护士会尽快前来处理'}
+                    {callFeedback.mode === 'paused' && (callFeedback.message || '恢复后才能发起呼叫，请联系护士')}
+                    {callFeedback.mode === 'duplicate' && `当前已有【${callFeedback.existingType ? CALL_TYPE_LABELS[callFeedback.existingType] : '未处理'}】请求`}
+                    {callFeedback.mode === 'merged' && `与${callFeedback.mergedSeatNumber}号合并，护士会统一处理`}
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 gap-3">
-              {callButtons.map(({ type, label, icon, color }) => (
-                <button
-                  key={type}
-                  onClick={() => handleCall(type)}
-                  disabled={!seat.patientName || callSuccess === type}
-                  className={`
-                    p-4 rounded-2xl text-white font-semibold bg-gradient-to-br ${color}
-                    transition-all duration-200 hover:scale-[1.03] active:scale-95 shadow-lg
-                    disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100
-                    flex flex-col items-center justify-center gap-2
-                    ${callSuccess === type ? 'ring-4 ring-emerald-400/50' : ''}
-                  `}
-                >
-                  {callSuccess === type ? (
-                    <div className="w-7 h-7 rounded-full bg-white/30 flex items-center justify-center">
-                      <span className="text-lg">✓</span>
-                    </div>
-                  ) : icon}
-                  <span className="text-sm">{callSuccess === type ? '已发送' : label}</span>
-                </button>
-              ))}
+              {callButtons.map(({ type, label, icon, color }) => {
+                const hasActive = activeCalls.length > 0;
+                const isDisabled = !seat.patientName || hasActive;
+                return (
+                  <button
+                    key={type}
+                    onClick={() => handleCall(type)}
+                    disabled={isDisabled}
+                    className={`
+                      p-4 rounded-2xl text-white font-semibold bg-gradient-to-br ${color}
+                      transition-all duration-200 hover:scale-[1.03] active:scale-95 shadow-lg
+                      disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100
+                      flex flex-col items-center justify-center gap-2
+                      ${hasActive ? '' : ''}
+                    `}
+                  >
+                    {icon}
+                    <span className="text-sm">{label}</span>
+                  </button>
+                );
+              })}
             </div>
+
+            {activeCalls.length > 0 && (
+              <div className="mt-3 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5" />
+                当前已有{activeCalls.length}个未处理呼叫，请等待处理完成后再发起新呼叫
+              </div>
+            )}
+            {seat.isPaused && (
+              <div className="mt-3 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <Pause className="w-3.5 h-3.5" />
+                座位处于暂停状态，患者端无法发起呼叫
+              </div>
+            )}
           </div>
         </div>
       </div>

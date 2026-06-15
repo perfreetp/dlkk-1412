@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useCallStore } from '../../stores/useCallStore';
 import { useSettingStore } from '../../stores/useSettingStore';
 import { CallRecord, CALL_TYPE_LABELS, CALL_PRIORITY_LABELS, DEFAULT_TIMEOUT_THRESHOLDS } from '../../types';
-import { ListTodo, Clock, UserCheck, AlertCircle, Syringe, Pill, Bandage, MessageCircle, AlertTriangle, MoreHorizontal, CheckCircle2, X } from 'lucide-react';
+import { ListTodo, Clock, UserCheck, AlertCircle, Syringe, Pill, Bandage, MessageCircle, AlertTriangle, MoreHorizontal, CheckCircle2, X, Users, Zap } from 'lucide-react';
 import { useAudio } from '../../hooks/useAudio';
 
 const priorityStyles: Record<string, { bg: string; text: string; badge: string }> = {
@@ -43,21 +43,20 @@ function CallCard({ call, onAccept, onComplete, onCancel }: {
   const styles = priorityStyles[call.priority];
   const waitTime = now - call.createdAt;
   const timeout = DEFAULT_TIMEOUT_THRESHOLDS[call.priority];
-  const isTimeout = call.status === 'pending' && waitTime > timeout;
+  const isTimeout = call.isTimeout || waitTime > timeout;
   const progress = Math.min(100, (waitTime / timeout) * 100);
-  const mergedCount = call.mergedIds?.length || 0;
+  const mergedSeatNumbers = call.mergedSeatNumbers || [];
+  const totalSeats = 1 + mergedSeatNumbers.length;
+  const allSeatNumbers = [call.seatNumber, ...mergedSeatNumbers];
 
   return (
     <div className={`
       relative p-4 rounded-2xl border-2 ${styles.bg}
       transition-all duration-300 animate-slide-in
       ${isTimeout ? 'animate-flash-red ring-2 ring-red-400' : ''}
-      ${call.status === 'accepted' ? 'opacity-80' : ''}
+      ${call.status === 'accepted' ? 'opacity-90' : ''}
     `}>
-      <div className="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl" style={{
-        background: isTimeout ? '#EF4444' : undefined,
-        backgroundColor: !isTimeout ? undefined : undefined
-      }}>
+      <div className="absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl">
         <div className={`w-full h-full rounded-l-2xl ${styles.badge} ${isTimeout ? 'bg-red-500 animate-pulse' : ''}`} />
       </div>
 
@@ -71,49 +70,65 @@ function CallCard({ call, onAccept, onComplete, onCancel }: {
               {typeIcons[call.type]}
               <span className="ml-1">{CALL_TYPE_LABELS[call.type]}</span>
             </span>
-            {mergedCount > 0 && (
-              <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-medium">
-                合并{mergedCount}单
+            {mergedSeatNumbers.length > 0 && (
+              <span className="px-2.5 py-1 rounded-full text-xs bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1">
+                <Users className="w-3 h-3" />
+                合并{totalSeats}单
               </span>
             )}
             {isTimeout && (
-              <span className="px-2 py-0.5 rounded-full text-xs bg-red-100 dark:bg-red-900/30 text-red-600 font-bold animate-pulse flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" /> 超时
+              <span className="px-2.5 py-1 rounded-full text-xs bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-300 font-bold animate-pulse flex items-center gap-1">
+                <Zap className="w-3 h-3" /> 超时加急
               </span>
             )}
           </div>
 
-          <div className="flex items-center gap-4 text-sm">
-            <div className="font-bold text-lg text-slate-800 dark:text-white">
+          <div className="flex items-baseline gap-3 flex-wrap">
+            <div className="font-black text-xl text-slate-800 dark:text-white flex items-center gap-1.5">
               {call.seatNumber}号
+              {call.patientName && <span className="text-base font-medium text-slate-500 dark:text-slate-400">· {call.patientName}</span>}
             </div>
-            {call.patientName && (
-              <div className="text-slate-600 dark:text-slate-400">{call.patientName}</div>
-            )}
           </div>
 
+          {mergedSeatNumbers.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                <Users className="w-3.5 h-3.5" /> 包含座位：
+              </span>
+              {allSeatNumbers.map((num, i) => (
+                <span
+                  key={i}
+                  className="px-2 py-0.5 rounded-lg text-xs font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+                >
+                  {num}号
+                </span>
+              ))}
+            </div>
+          )}
+
           {call.abnormalType && (
-            <div className="mt-2 text-sm text-red-600 dark:text-red-400 font-medium">
-              ⚠️ {call.abnormalType}
+            <div className="mt-2.5 text-sm text-red-600 dark:text-red-400 font-medium flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4" />
+              {call.abnormalType}
             </div>
           )}
 
           {call.acceptedBy && call.status === 'accepted' && (
-            <div className="mt-2 text-sm text-blue-600 dark:text-blue-400 flex items-center gap-1">
+            <div className="mt-2.5 text-sm text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1.5">
               <UserCheck className="w-4 h-4" />
-              {call.acceptedBy} 已接单
+              {call.acceptedBy} 已接单，正在赶来
             </div>
           )}
 
           <div className="mt-3 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-slate-400" />
-            <span className="text-sm text-slate-600 dark:text-slate-400 tabular-nums">
-              等待 {formatDuration(waitTime)}
+            <Clock className={`w-4 h-4 ${isTimeout ? 'text-red-500' : 'text-slate-400'}`} />
+            <span className={`text-sm font-bold tabular-nums ${isTimeout ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'}`}>
+              {isTimeout ? '已等待 ' : '等待 '}{formatDuration(waitTime)}
             </span>
             {call.status === 'pending' && (
               <div className="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden ml-2">
                 <div
-                  className={`h-full rounded-full transition-all duration-1000 ${isTimeout ? 'bg-red-500' : progress > 70 ? 'bg-orange-500' : 'bg-blue-500'}`}
+                  className={`h-full rounded-full transition-all duration-1000 ${isTimeout ? 'bg-red-500 animate-pulse' : progress > 70 ? 'bg-orange-500' : 'bg-blue-500'}`}
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -121,18 +136,21 @@ function CallCard({ call, onAccept, onComplete, onCancel }: {
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 flex-shrink-0">
           {call.status === 'pending' && (
             <>
               <button
                 onClick={onAccept}
-                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-semibold text-sm transition-all hover:scale-105 active:scale-95 shadow-lg shadow-blue-500/30"
+                className={`px-4 py-2.5 text-white rounded-xl font-bold text-sm transition-all hover:scale-105 active:scale-95 shadow-lg ${isTimeout
+                  ? 'bg-gradient-to-r from-red-500 to-rose-600 shadow-red-500/30'
+                  : 'bg-gradient-to-r from-blue-500 to-indigo-600 shadow-blue-500/30'
+                }`}
               >
-                接单
+                {isTimeout ? '立即处理' : '接单'}
               </button>
               <button
                 onClick={onCancel}
-                className="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-sm transition-all"
+                className="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-xl text-sm font-medium transition-all"
               >
                 取消
               </button>
@@ -141,7 +159,7 @@ function CallCard({ call, onAccept, onComplete, onCancel }: {
           {call.status === 'accepted' && (
             <button
               onClick={onComplete}
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-semibold text-sm transition-all hover:scale-105 active:scale-95 shadow-lg shadow-emerald-500/30 flex items-center gap-1"
+              className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-xl font-bold text-sm transition-all hover:scale-105 active:scale-95 shadow-lg shadow-emerald-500/30 flex items-center gap-1.5"
             >
               <CheckCircle2 className="w-4 h-4" />
               完成
@@ -162,6 +180,7 @@ export default function CallQueue() {
   const sortedCalls = getSortedCalls();
   const pendingCount = sortedCalls.filter(c => c.status === 'pending').length;
   const processingCount = sortedCalls.filter(c => c.status === 'accepted').length;
+  const timeoutCount = sortedCalls.filter(c => c.isTimeout || (Date.now() - c.createdAt > DEFAULT_TIMEOUT_THRESHOLDS[c.priority] && c.status === 'pending')).length;
 
   useEffect(() => {
     const currentPending = calls.filter(c => c.status === 'pending').length;
@@ -182,14 +201,20 @@ export default function CallQueue() {
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">按优先级自动排序处理</p>
         </div>
-        <div className="flex gap-3">
-          <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/30 rounded-xl text-center">
-            <div className="text-2xl font-bold text-amber-600">{pendingCount}</div>
-            <div className="text-xs text-amber-600/70">待接单</div>
+        <div className="flex gap-2.5">
+          {timeoutCount > 0 && (
+            <div className="px-3.5 py-2 bg-red-50 dark:bg-red-950/30 rounded-xl text-center border border-red-100 dark:border-red-900/50 animate-pulse">
+              <div className="text-xl font-black text-red-600 dark:text-red-400 tabular-nums">{timeoutCount}</div>
+              <div className="text-[10px] font-bold text-red-500/80">超时加急</div>
+            </div>
+          )}
+          <div className="px-3.5 py-2 bg-amber-50 dark:bg-amber-950/30 rounded-xl text-center border border-amber-100 dark:border-amber-900/50">
+            <div className="text-xl font-black text-amber-600 dark:text-amber-400 tabular-nums">{pendingCount}</div>
+            <div className="text-[10px] font-bold text-amber-600/70">待接单</div>
           </div>
-          <div className="px-4 py-2 bg-blue-50 dark:bg-blue-950/30 rounded-xl text-center">
-            <div className="text-2xl font-bold text-blue-600">{processingCount}</div>
-            <div className="text-xs text-blue-600/70">处理中</div>
+          <div className="px-3.5 py-2 bg-blue-50 dark:bg-blue-950/30 rounded-xl text-center border border-blue-100 dark:border-blue-900/50">
+            <div className="text-xl font-black text-blue-600 dark:text-blue-400 tabular-nums">{processingCount}</div>
+            <div className="text-[10px] font-bold text-blue-600/70">处理中</div>
           </div>
         </div>
       </div>

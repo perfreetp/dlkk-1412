@@ -23,7 +23,7 @@ export class StatService {
       : 0;
 
     const calls = memoryStore.getCalls();
-    const timeoutCount = calls.filter(c => c.status === 'timeout').length;
+    const timeoutCount = calls.filter(c => c.isTimeout).length;
 
     const hourCounts: Record<number, number> = {};
     records.forEach(r => {

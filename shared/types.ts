@@ -1,6 +1,6 @@
 export type CallType = 'medication' | 'remove_needle' | 'hemostasis' | 'consultation' | 'abnormal' | 'other';
 export type CallPriority = 'urgent' | 'high' | 'normal' | 'low';
-export type CallStatus = 'pending' | 'accepted' | 'processing' | 'completed' | 'cancelled' | 'timeout';
+export type CallStatus = 'pending' | 'accepted' | 'processing' | 'completed' | 'cancelled';
 export type SeatStatus = 'idle' | 'infusing' | 'calling' | 'processing' | 'abnormal';
 
 export interface Seat {
@@ -32,6 +32,18 @@ export interface CallRecord {
   remark?: string;
   abnormalType?: string;
   mergedIds?: string[];
+  mergedSeatNumbers?: string[];
+  mergedIntoId?: string;
+  isTimeout?: boolean;
+}
+
+export interface CreateCallResult {
+  call: CallRecord | null;
+  isDuplicate?: boolean;
+  duplicateType?: CallType;
+  isPaused?: boolean;
+  isMerged?: boolean;
+  mergedIntoCall?: CallRecord | null;
 }
 
 export interface PatrolTask {

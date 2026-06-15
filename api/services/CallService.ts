@@ -1,20 +1,30 @@
-import { CallRecord, CallType, CallStatus, Seat, CALL_TYPE_PRIORITY, DEFAULT_TIMEOUT_THRESHOLDS, ServiceRecord } from '../../shared/types';
+import { CallRecord, CallType, CallStatus, Seat, CALL_TYPE_PRIORITY, DEFAULT_TIMEOUT_THRESHOLDS, ServiceRecord, CreateCallResult } from '../../shared/types';
 import { memoryStore } from '../stores/MemoryStore';
 import { WebSocketServer } from '../ws/WebSocketServer';
+
+
 
 function generateId(): string {
   return `call-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 export class CallService {
-  static createCall(seatId: string, type: CallType, abnormalType?: string): CallRecord | null {
+  static createCall(seatId: string, type: CallType, abnormalType?: string): CreateCallResult {
     const seat = memoryStore.getSeatById(seatId);
-    if (!seat) return null;
+    if (!seat) return { call: null };
+
+    if (seat.isPaused) {
+      return { call: null, isPaused: true };
+    }
 
     if (seat.currentCallId) {
       const existing = memoryStore.getCallById(seat.currentCallId);
       if (existing && existing.status !== 'completed' && existing.status !== 'cancelled') {
-        return existing;
+        return {
+          call: existing,
+          isDuplicate: true,
+          duplicateType: existing.type
+        };
       }
     }
 
@@ -31,29 +41,43 @@ export class CallService {
       patientName: seat.patientName,
       createdAt: Date.now(),
       timeoutAt,
-      abnormalType
+      abnormalType,
+      isTimeout: false
     };
 
     const newCall = memoryStore.addCall(call);
     const seatStatus: Seat['status'] = type === 'abnormal' ? 'abnormal' : 'calling';
     memoryStore.updateSeat(seatId, { status: seatStatus, currentCallId: call.id });
 
-    this.tryMergeCalls(newCall);
+    const mergeResult = this.tryMergeCalls(newCall);
+
     WebSocketServer.broadcast({ type: 'CALL_CREATED', data: newCall });
     WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(seatId) });
 
-    return newCall;
+    if (mergeResult?.mergedInto) {
+      WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: mergeResult.mergedInto });
+    }
+
+    if (mergeResult?.mergedInto) {
+      return {
+        call: newCall,
+        isMerged: true,
+        mergedIntoCall: mergeResult.mergedInto
+      };
+    }
+
+    return { call: newCall };
   }
 
-  private static tryMergeCalls(newCall: CallRecord) {
-    if (newCall.priority === 'urgent') return;
+  private static tryMergeCalls(newCall: CallRecord): { mergedInto: CallRecord | null } | null {
+    if (newCall.priority === 'urgent') return null;
 
     const pendingCalls = memoryStore.getCalls({ status: 'pending' }).filter(
-      c => c.id !== newCall.id && c.type === newCall.type && c.priority === newCall.priority
+      c => c.id !== newCall.id && c.type === newCall.type && c.priority === newCall.priority && !c.mergedIntoId
     );
 
     const newSeat = memoryStore.getSeatById(newCall.seatId);
-    if (!newSeat) return;
+    if (!newSeat) return null;
 
     const timeWindow = 5 * 60 * 1000;
     const nearbyCalls = pendingCalls.filter(c => {
@@ -68,14 +92,27 @@ export class CallService {
     if (nearbyCalls.length > 0) {
       const mainCall = nearbyCalls[0];
       const mergedIds = [...(mainCall.mergedIds || []), newCall.id];
-      memoryStore.updateCall(mainCall.id, { mergedIds });
-      memoryStore.updateCall(newCall.id, { status: 'cancelled' });
+      const mergedSeatNumbers = [...(mainCall.mergedSeatNumbers || []), newCall.seatNumber];
+
+      const updatedMain = memoryStore.updateCall(mainCall.id, {
+        mergedIds,
+        mergedSeatNumbers
+      });
+
+      memoryStore.updateCall(newCall.id, {
+        mergedIntoId: mainCall.id
+      });
+
+      return { mergedInto: updatedMain || null };
     }
+
+    return null;
   }
 
   static acceptCall(callId: string, nurseName: string): CallRecord | null {
     const call = memoryStore.getCallById(callId);
-    if (!call || call.status !== 'pending') return null;
+    if (!call) return null;
+    if (call.status !== 'pending') return null;
 
     const updated = memoryStore.updateCall(callId, {
       status: 'accepted',
@@ -103,7 +140,8 @@ export class CallService {
 
   static completeCall(callId: string, remark?: string): CallRecord | null {
     const call = memoryStore.getCallById(callId);
-    if (!call || (call.status !== 'accepted' && call.status !== 'processing')) return null;
+    if (!call) return null;
+    if (call.status !== 'accepted' && call.status !== 'processing') return null;
 
     const now = Date.now();
     const updated = memoryStore.updateCall(callId, {
@@ -146,6 +184,22 @@ export class CallService {
             const subNewStatus: Seat['status'] = subSeat.infusionStartTime ? 'infusing' : 'idle';
             memoryStore.updateSeat(subCall.seatId, { status: subNewStatus, currentCallId: undefined });
           }
+          if (subCall.acceptedAt) {
+            const subResponseTime = Math.floor((subCall.acceptedAt - subCall.createdAt) / 1000);
+            const subProcessTime = Math.floor((now - subCall.acceptedAt) / 1000);
+            const date = new Date(now);
+            memoryStore.addRecord({
+              id: `record-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+              callId: subCall.id,
+              seatNumber: subCall.seatNumber,
+              callType: subCall.type,
+              responseTime: subResponseTime,
+              processTime: subProcessTime,
+              handledBy: subCall.acceptedBy,
+              recordDate: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+              completedAt: now
+            });
+          }
         }
       });
     }
@@ -168,6 +222,34 @@ export class CallService {
       memoryStore.updateSeat(call.seatId, { status: newStatus, currentCallId: undefined });
     }
 
+    if (updated?.mergedIds) {
+      updated.mergedIds.forEach(id => {
+        const subCall = memoryStore.getCallById(id);
+        if (subCall) {
+          memoryStore.updateCall(id, { status: 'cancelled' });
+          const subSeat = memoryStore.getSeatById(subCall.seatId);
+          if (subSeat) {
+            const subNewStatus: Seat['status'] = subSeat.infusionStartTime ? 'infusing' : 'idle';
+            memoryStore.updateSeat(subCall.seatId, { status: subNewStatus, currentCallId: undefined });
+            WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(subCall.seatId) });
+          }
+        }
+      });
+    }
+
+    if (call.mergedIntoId) {
+      const mainCall = memoryStore.getCallById(call.mergedIntoId);
+      if (mainCall && mainCall.mergedIds) {
+        const newMergedIds = mainCall.mergedIds.filter(id => id !== callId);
+        const newMergedSeats = (mainCall.mergedSeatNumbers || []).filter(n => n !== call.seatNumber);
+        const updatedMain = memoryStore.updateCall(mainCall.id, {
+          mergedIds: newMergedIds,
+          mergedSeatNumbers: newMergedSeats
+        });
+        WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: updatedMain });
+      }
+    }
+
     WebSocketServer.broadcast({ type: 'CALL_UPDATED', data: updated });
     WebSocketServer.broadcast({ type: 'SEAT_UPDATED', data: memoryStore.getSeatById(call.seatId) });
 
@@ -178,11 +260,26 @@ export class CallService {
     const now = Date.now();
     const pendingCalls = memoryStore.getCalls({ status: 'pending' });
 
+    let updatedAny = false;
+
     pendingCalls.forEach(call => {
-      if (call.timeoutAt && now > call.timeoutAt) {
-        memoryStore.updateCall(call.id, { status: 'timeout' });
-        WebSocketServer.broadcast({ type: 'CALL_TIMEOUT', data: call });
+      if (call.timeoutAt && now > call.timeoutAt && !call.isTimeout) {
+        memoryStore.updateCall(call.id, { isTimeout: true });
+        updatedAny = true;
+        const updated = memoryStore.getCallById(call.id);
+        if (updated) {
+          WebSocketServer.broadcast({ type: 'CALL_TIMEOUT', data: updated });
+        }
+      }
+
+      if (call.timeoutAt && now <= call.timeoutAt && call.isTimeout) {
+        memoryStore.updateCall(call.id, { isTimeout: false });
+        updatedAny = true;
       }
     });
+
+    if (updatedAny) {
+      WebSocketServer.broadcast({ type: 'CALLS_REFRESH', data: { timestamp: now } });
+    }
   }
 }

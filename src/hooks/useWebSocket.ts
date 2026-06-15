@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useSeatStore } from '../stores/useSeatStore';
 import { useCallStore } from '../stores/useCallStore';
 import { usePatrolStore } from '../stores/usePatrolStore';
+import { useStatStore } from '../stores/useStatStore';
 import { Seat, CallRecord, PatrolTask } from '../types';
 
 interface WSMessage {
@@ -29,6 +30,8 @@ export function useWebSocket() {
         useSeatStore.getState().fetchSeats();
         useCallStore.getState().fetchCalls();
         usePatrolStore.getState().fetchPatrols();
+        useStatStore.getState().fetchStatistics();
+        useStatStore.getState().fetchRecords();
       };
 
       ws.onmessage = (event) => {
@@ -59,24 +62,37 @@ export function useWebSocket() {
         case 'SEAT_UPDATED':
           useSeatStore.getState().updateSeat(data as Seat);
           break;
+
         case 'CALL_CREATED':
           useCallStore.getState().addCall(data as CallRecord);
           break;
+
         case 'CALL_UPDATED':
           useCallStore.getState().updateCall(data as CallRecord);
           break;
+
         case 'CALL_COMPLETED':
           useCallStore.getState().setCompletedReceipt(data as CallRecord);
+          useStatStore.getState().fetchStatistics();
+          useStatStore.getState().fetchRecords();
           break;
+
         case 'CALL_TIMEOUT':
           useCallStore.getState().updateCall(data as CallRecord);
           break;
+
+        case 'CALLS_REFRESH':
+          useCallStore.getState().fetchCalls();
+          break;
+
         case 'PATROL_CREATED':
           usePatrolStore.getState().addPatrol(data as PatrolTask);
           break;
+
         case 'PATROL_UPDATED':
           usePatrolStore.getState().updatePatrol(data as PatrolTask);
           break;
+
         case 'PATROL_DUE':
           usePatrolStore.getState().setDuePatrolId((data as PatrolTask).id);
           break;

@@ -2,7 +2,8 @@ import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Pill, Syringe, Bandage, MessageCircle, AlertTriangle, MoreHorizontal,
-  ArrowLeft, CheckCircle2, Clock, User, Heart, X, ChevronRight, Volume2, VolumeX, Moon, Sun
+  ArrowLeft, CheckCircle2, Clock, User, Heart, X, ChevronRight, Volume2, VolumeX, Moon, Sun,
+  Users, Zap, AlertCircle
 } from 'lucide-react';
 
 import { useSeatStore } from '../stores/useSeatStore';
@@ -32,7 +33,7 @@ export default function PatientView() {
 
   const [showAbnormalPicker, setShowAbnormalPicker] = useState(false);
   const [selectedAbnormal, setSelectedAbnormal] = useState('');
-  const [callFeedback, setCallFeedback] = useState<{ type: CallType; show: boolean } | null>(null);
+  const [callFeedback, setCallFeedback] = useState<{ type: CallType; show: boolean; mode: 'success' | 'paused' | 'duplicate' | 'merged'; message?: string; existingType?: CallType; mergedSeatNumber?: string } | null>(null);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -65,29 +66,116 @@ export default function PatientView() {
   }, [calls]);
 
   const myQueuePosition = useMemo(() => {
-    const idx = allActiveCalls.findIndex((c) => myActiveCalls.some((m) => m.id === c.id));
-    return idx >= 0 ? idx + 1 : null;
-  }, [allActiveCalls, myActiveCalls]);
+    const mainCall = useCallStore.getState().findMainCallForSeat(seatId);
+    if (!mainCall) return null;
+    const position = useCallStore.getState().getQueuePosition(mainCall.id);
+    return position > 0 ? position : null;
+  }, [calls, seatId]);
 
   const handleCall = async (type: CallType) => {
+    if (seat?.isPaused) {
+      setCallFeedback({
+        type,
+        show: true,
+        mode: 'paused',
+        message: '当前座位呼叫功能已临时暂停'
+      });
+      setTimeout(() => setCallFeedback(null), 3000);
+      return;
+    }
+
     if (type === 'abnormal') {
       setShowAbnormalPicker(true);
       return;
     }
+
     const result = await createCall(seatId, type);
-    if (result) {
-      setCallFeedback({ type, show: true });
+
+    if (result.isPaused) {
+      setCallFeedback({
+        type,
+        show: true,
+        mode: 'paused',
+        message: result.message || '座位已暂停，请联系护士恢复后再呼叫'
+      });
+      setTimeout(() => setCallFeedback(null), 3500);
+      return;
+    }
+
+    if (result.isDuplicate) {
+      setCallFeedback({
+        type,
+        show: true,
+        mode: 'duplicate',
+        existingType: result.duplicateType,
+        message: result.message || '已有未处理的呼叫'
+      });
+      setTimeout(() => setCallFeedback(null), 3500);
+      return;
+    }
+
+    if (result.isMerged && result.mergedIntoCall) {
+      setCallFeedback({
+        type,
+        show: true,
+        mode: 'merged',
+        mergedSeatNumber: result.mergedIntoCall.seatNumber,
+        message: `已加入${result.mergedIntoCall.seatNumber}号的合并呼叫队列`
+      });
+      setTimeout(() => setCallFeedback(null), 3000);
+      return;
+    }
+
+    if (result.call) {
+      setCallFeedback({ type, show: true, mode: 'success' });
       setTimeout(() => setCallFeedback(null), 2500);
     }
   };
 
   const handleAbnormalSubmit = async () => {
     if (!selectedAbnormal) return;
-    const result = await createCall(seatId, 'abnormal', selectedAbnormal);
-    if (result) {
+
+    if (seat?.isPaused) {
       setShowAbnormalPicker(false);
-      setSelectedAbnormal('');
-      setCallFeedback({ type: 'abnormal', show: true });
+      setCallFeedback({
+        type: 'abnormal',
+        show: true,
+        mode: 'paused',
+        message: '当前座位呼叫功能已临时暂停'
+      });
+      setTimeout(() => setCallFeedback(null), 3000);
+      return;
+    }
+
+    const result = await createCall(seatId, 'abnormal', selectedAbnormal);
+    setShowAbnormalPicker(false);
+    setSelectedAbnormal('');
+
+    if (result.isPaused) {
+      setCallFeedback({
+        type: 'abnormal',
+        show: true,
+        mode: 'paused',
+        message: result.message || '座位已暂停，请联系护士恢复后再呼叫'
+      });
+      setTimeout(() => setCallFeedback(null), 3500);
+      return;
+    }
+
+    if (result.isDuplicate) {
+      setCallFeedback({
+        type: 'abnormal',
+        show: true,
+        mode: 'duplicate',
+        existingType: result.duplicateType,
+        message: result.message || '已有未处理的呼叫'
+      });
+      setTimeout(() => setCallFeedback(null), 3500);
+      return;
+    }
+
+    if (result.call) {
+      setCallFeedback({ type: 'abnormal', show: true, mode: 'success' });
       setTimeout(() => setCallFeedback(null), 2500);
     }
   };
@@ -310,7 +398,7 @@ export default function PatientView() {
                         </div>
                         <div>
                           <div className="font-black text-base">{CALL_TYPE_LABELS[call.type]}</div>
-                          <div className={`text-xs flex items-center gap-1.5 mt-0.5 ${nightActive ? 'text-indigo-300' : 'text-slate-500'}`}>
+                          <div className={`text-xs flex items-center gap-1.5 mt-0.5 flex-wrap ${nightActive ? 'text-indigo-300' : 'text-slate-500'}`}>
                             <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${call.priority === 'urgent'
                               ? 'bg-red-500 text-white'
                               : call.priority === 'high'
@@ -322,6 +410,11 @@ export default function PatientView() {
                               {CALL_PRIORITY_LABELS[call.priority]}优先级
                             </span>
                             {call.abnormalType && <span>· {call.abnormalType}</span>}
+                            {call.mergedIntoId && (
+                              <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-0.5 ${nightActive ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-700'}`}>
+                                <Users className="w-3 h-3" /> 已合并
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -517,17 +610,72 @@ export default function PatientView() {
       {callFeedback?.show && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none animate-fade-in">
           <div className={`
-            px-8 py-6 rounded-3xl shadow-2xl text-center animate-scale-in
-            bg-gradient-to-br from-emerald-400 via-emerald-500 to-teal-600 text-white
-            max-w-sm w-full
+            px-8 py-6 rounded-3xl shadow-2xl text-center animate-scale-in max-w-sm w-full
+            ${callFeedback.mode === 'success'
+              ? 'bg-gradient-to-br from-emerald-400 via-emerald-500 to-teal-600 text-white'
+              : callFeedback.mode === 'paused'
+                ? 'bg-gradient-to-br from-slate-500 via-slate-600 to-slate-700 text-white'
+                : callFeedback.mode === 'duplicate'
+                  ? 'bg-gradient-to-br from-amber-400 via-orange-500 to-amber-600 text-white'
+                  : 'bg-gradient-to-br from-cyan-400 via-blue-500 to-indigo-600 text-white'
+            }
           `}>
-            <CheckCircle2 className="w-16 h-16 mx-auto mb-3 animate-bounce" strokeWidth={2.5} />
-            <div className="text-2xl font-black mb-1">呼叫已发送 ✨</div>
-            <div className="text-white/90">
-              {CALL_TYPE_LABELS[callFeedback.type]}请求已提交
-              <br />
-              护士会尽快前来处理
-            </div>
+            {callFeedback.mode === 'success' && (
+              <>
+                <CheckCircle2 className="w-16 h-16 mx-auto mb-3 animate-bounce" strokeWidth={2.5} />
+                <div className="text-2xl font-black mb-1">呼叫已发送 ✨</div>
+                <div className="text-white/90">
+                  {CALL_TYPE_LABELS[callFeedback.type]}请求已提交
+                  <br />
+                  护士会尽快前来处理
+                </div>
+              </>
+            )}
+            {callFeedback.mode === 'paused' && (
+              <>
+                <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white/20 flex items-center justify-center">
+                  <span className="text-4xl">⏸</span>
+                </div>
+                <div className="text-2xl font-black mb-2">呼叫已暂停</div>
+                <div className="text-white/90 text-base leading-relaxed">
+                  {callFeedback.message || '当前座位呼叫功能已临时暂停'}
+                  <br />
+                  <span className="text-white/70 text-sm">请联系护士恢复后再使用</span>
+                </div>
+              </>
+            )}
+            {callFeedback.mode === 'duplicate' && (
+              <>
+                <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white/20 flex items-center justify-center">
+                  <AlertCircle className="w-10 h-10" />
+                </div>
+                <div className="text-2xl font-black mb-2">已有呼叫等待中</div>
+                <div className="text-white/90 text-base leading-relaxed">
+                  当前座位已有
+                  <span className="font-black px-1.5 py-0.5 rounded bg-white/20 mx-1">
+                    {callFeedback.existingType ? CALL_TYPE_LABELS[callFeedback.existingType] : '未处理'}
+                  </span>
+                  请求
+                  <br />
+                  <span className="text-white/70 text-sm">请先等待处理完成或取消当前呼叫</span>
+                </div>
+              </>
+            )}
+            {callFeedback.mode === 'merged' && (
+              <>
+                <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white/20 flex items-center justify-center">
+                  <Users className="w-10 h-10" />
+                </div>
+                <div className="text-2xl font-black mb-2">已加入合并队列 👥</div>
+                <div className="text-white/90 text-base leading-relaxed">
+                  您的{CALL_TYPE_LABELS[callFeedback.type]}请求
+                  <br />
+                  已与{callFeedback.mergedSeatNumber}号合并处理
+                  <br />
+                  <span className="text-white/70 text-sm">护士会统一前往，减少您的等待</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

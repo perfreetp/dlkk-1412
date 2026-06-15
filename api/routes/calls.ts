@@ -15,12 +15,51 @@ router.post('/', (req, res) => {
   if (!seatId || !type) {
     return res.status(400).json({ success: false, error: '缺少必要参数' });
   }
-  const call = CallService.createCall(seatId, type, abnormalType);
-  if (!call) {
+  const result = CallService.createCall(seatId, type, abnormalType);
+
+  if (result.isPaused) {
+    return res.status(400).json({
+      success: false,
+      error: '座位已暂停',
+      isPaused: true,
+      message: '当前座位呼叫功能已临时暂停，请联系护士恢复后再使用'
+    });
+  }
+
+  if (result.isDuplicate) {
+    return res.status(409).json({
+      success: false,
+      error: '该座位已有未处理的呼叫',
+      isDuplicate: true,
+      duplicateType: result.duplicateType,
+      existingCall: result.call,
+      message: `当前座位已有【${result.duplicateType ? typeLabel(result.duplicateType) : ''}】请求等待处理，请先完成或取消当前呼叫`
+    });
+  }
+
+  if (!result.call) {
     return res.status(404).json({ success: false, error: '座位不存在' });
   }
-  res.json({ success: true, data: call });
+
+  res.json({
+    success: true,
+    data: result.call,
+    isMerged: result.isMerged,
+    mergedIntoCall: result.mergedIntoCall
+  });
 });
+
+function typeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    medication: '加药',
+    remove_needle: '拔针',
+    hemostasis: '止血',
+    consultation: '咨询',
+    abnormal: '异常',
+    other: '其他'
+  };
+  return labels[type] || type;
+}
 
 router.put('/:id/accept', (req, res) => {
   const { nurseName } = req.body;
